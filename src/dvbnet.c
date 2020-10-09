@@ -9,13 +9,11 @@
 
 #include "dvbnet.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <errno.h>
 
 #include <linux/dvb/net.h>
-#include <linux/dvb/dmx.h>
-#include <linux/dvb/frontend.h>
 
 #define MAX_IF 10
 
@@ -42,6 +40,28 @@ struct _Dvbnet
 };
 
 G_DEFINE_TYPE (Dvbnet, dvbnet, GTK_TYPE_APPLICATION)
+
+static void dvbnet_about ( Dvbnet *dvbnet )
+{
+	GtkAboutDialog *dialog = (GtkAboutDialog *)gtk_about_dialog_new ();
+	gtk_window_set_transient_for ( GTK_WINDOW ( dialog ), dvbnet->window );
+
+	gtk_window_set_icon_name ( GTK_WINDOW ( dialog ), "applications-internet" );
+	gtk_about_dialog_set_logo_icon_name ( dialog, "applications-internet" );
+
+	const char *authors[] = { "Stepan Perun", " ", NULL };
+
+	gtk_about_dialog_set_program_name ( dialog, "DvbNet-Gtk" );
+	gtk_about_dialog_set_version ( dialog, "1.1.1" );
+	gtk_about_dialog_set_license_type ( dialog, GTK_LICENSE_LGPL_3_0 );
+	gtk_about_dialog_set_authors ( dialog, authors );
+	gtk_about_dialog_set_website ( dialog,   "https://github.com/vl-nix/dvbnet-gtk" );
+	gtk_about_dialog_set_copyright ( dialog, "Copyright 2020 DvbNet-Gtk" );
+	gtk_about_dialog_set_comments  ( dialog, "Control digital data network interfaces" );
+
+	gtk_dialog_run ( GTK_DIALOG (dialog) );
+	gtk_widget_destroy ( GTK_WIDGET (dialog) );
+}
 
 static void dvbnet_message_dialog ( const char *error, const char *file_or_info, GtkMessageType mesg_type, GtkWindow *window )
 {
@@ -289,6 +309,11 @@ static void dvbnet_clicked_button_net_del ( G_GNUC_UNUSED GtkButton *button, Dvb
 	dvb_net_del ( dvbnet );
 }
 
+static void dvbnet_clicked_button_net_inf ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
+{
+	dvbnet_about ( dvbnet );
+}
+
 static void dvbnet_spinbutton_changed_dvb_adapter ( GtkSpinButton *button, Dvbnet *dvbnet )
 {
 	gtk_spin_button_update ( button );
@@ -422,14 +447,17 @@ static GtkBox * dvbnet_create_net_box_control ( Dvbnet *dvbnet )
 	GtkButton *button_add = (GtkButton *)gtk_button_new_with_label ( "➕" );
 	GtkButton *button_rld = (GtkButton *)gtk_button_new_with_label ( "🔃" );
 	GtkButton *button_del = (GtkButton *)gtk_button_new_with_label ( "➖" );
+	GtkButton *button_inf = (GtkButton *)gtk_button_new_with_label ( "🛈" );
 
 	g_signal_connect ( button_add, "clicked", G_CALLBACK ( dvbnet_clicked_button_net_add ), dvbnet );
 	g_signal_connect ( button_rld, "clicked", G_CALLBACK ( dvbnet_clicked_button_net_rld ), dvbnet );
 	g_signal_connect ( button_del, "clicked", G_CALLBACK ( dvbnet_clicked_button_net_del ), dvbnet );
+	g_signal_connect ( button_inf, "clicked", G_CALLBACK ( dvbnet_clicked_button_net_inf ), dvbnet );
 
 	gtk_box_pack_start ( h_box, GTK_WIDGET ( button_add ), TRUE, TRUE,  0 );
 	gtk_box_pack_start ( h_box, GTK_WIDGET ( button_rld ), TRUE, TRUE,  0 );
 	gtk_box_pack_start ( h_box, GTK_WIDGET ( button_del ), TRUE, TRUE,  0 );
+	gtk_box_pack_start ( h_box, GTK_WIDGET ( button_inf ), TRUE, TRUE,  0 );
 
 	gtk_box_pack_start ( v_box, GTK_WIDGET ( h_box ), FALSE, FALSE, 0 );
 
