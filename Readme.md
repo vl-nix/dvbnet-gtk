@@ -1,6 +1,6 @@
 ### DvbNet-Gtk
 
-* DvbNet- [LinuxTV dvb-apps(https://www.linuxtv.org/wiki/index.php/LinuxTV_dvb-apps)
+* DvbNet - [LinuxTV dvb-apps](https://www.linuxtv.org/wiki/index.php/LinuxTV_dvb-apps)
 * Control digital data network interfaces
 
 #### Dependencies
