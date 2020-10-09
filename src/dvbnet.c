@@ -121,9 +121,7 @@ static char * dvbnet_get_ip ( const char *net_name, uint8_t mac_ip )
 {
 	struct ifreq ifr;
 
-	int fd = ( mac_ip ) ? socket ( AF_INET, SOCK_DGRAM, 0 ) : socket ( PF_INET, SOCK_DGRAM, IPPROTO_IP );
-
-	if ( mac_ip ) ifr.ifr_addr.sa_family = AF_INET;
+	int fd = ( mac_ip ) ? socket ( PF_INET, SOCK_DGRAM, IPPROTO_IP ) : socket ( AF_INET, SOCK_DGRAM, 0 );
 
 	strncpy ( ifr.ifr_name, net_name, IFNAMSIZ-1 );
 
