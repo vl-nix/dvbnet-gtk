@@ -13,9 +13,11 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 
-#include <linux/dvb/net.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 
-#define MAX_IF 10
+#include <linux/dvb/net.h>
 
 enum mode 
 {
@@ -24,15 +26,25 @@ enum mode
 	DEL_IF
 };
 
+enum cols_n
+{
+	COL_NUM,
+	COL_NAME,
+	COL_PID,
+	COL_ECPS,
+	COL_STR_IP,
+	COL_STR_MAC,
+	NUM_COLS
+};
+
 struct _Dvbnet
 {
 	GtkApplication  parent_instance;
 
 	GtkWindow *window;
-
-	GtkLabel *label_if;
 	GtkEntry *entry_ip;
 	GtkEntry *entry_mac;
+	GtkTreeView *treeview;
 
 	int net_fd;
 	uint8_t  dvb_adapter, dvb_net, net_ens;
@@ -105,16 +117,73 @@ static int dvb_net_get_if_info ( int fd, uint16_t ifnum, uint16_t *pid, uint8_t 
 	return 0;
 }
 
+static char * dvbnet_get_ip ( const char *net_name, uint8_t mac_ip )
+{
+	struct ifreq ifr;
+
+	int fd = ( mac_ip ) ? socket ( AF_INET, SOCK_DGRAM, 0 ) : socket ( PF_INET, SOCK_DGRAM, IPPROTO_IP );
+
+	if ( mac_ip ) ifr.ifr_addr.sa_family = AF_INET;
+
+	strncpy ( ifr.ifr_name, net_name, IFNAMSIZ-1 );
+
+	if ( mac_ip )
+	{
+		if ( ioctl ( fd, SIOCGIFHWADDR, &ifr ) < 0 ) { close ( fd ); return g_strdup ( "None" ); }
+
+		char *ret = malloc ( 18 );
+
+		uint8_t i = 0; for ( i = 0; i < 6; ++i )
+			snprintf ( ret+i*3, 13-i*2, "%02x%s", (uint8_t)ifr.ifr_addr.sa_data[i], ":" );
+
+		close ( fd );
+
+		return ret;
+	}
+	else
+	{
+		if ( ioctl ( fd, SIOCGIFADDR, &ifr ) < 0 ) { close ( fd ); return g_strdup ( "None" ); }
+
+		char *ret = g_strdup ( inet_ntoa ( ( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr ) );
+
+		close ( fd );
+
+		return ret;
+	}
+
+	return g_strdup ( "None" );
+}
+
+static void dvbnet_treeview_append ( const char *name, uint16_t if_num, uint16_t pid, uint8_t encaps, const char *ip_str, const char *str_mac, Dvbnet *dvbnet )
+{
+	GtkTreeIter iter;
+	GtkTreeModel *model = gtk_tree_view_get_model ( dvbnet->treeview );
+
+	int ind = gtk_tree_model_iter_n_children ( model, NULL );
+	if ( ind >= UINT8_MAX ) return;
+
+	gtk_list_store_append ( GTK_LIST_STORE ( model ), &iter );
+	gtk_list_store_set    ( GTK_LIST_STORE ( model ), &iter,
+				COL_NUM, if_num,
+				COL_NAME, name,
+				COL_PID,  pid,
+				COL_ECPS, ( encaps ) ? "Ule" : "Mpe",
+				COL_STR_IP, ip_str,
+				COL_STR_MAC, str_mac,
+				-1 );
+}
+
 static void dvb_net_set_if_info ( Dvbnet *dvbnet )
 {
 	dvbnet->net_fd = dvb_net_open ( dvbnet );
 
 	if ( dvbnet->net_fd == -1 ) return;
 
-	/* 250 * MAX_IF */
-	char text[2500] = {}, *p = NULL;
+	char text[10] = {};
 
-	uint16_t ifs = 0; for ( ifs = 0; ifs < MAX_IF; ifs++ )
+	gtk_list_store_clear ( GTK_LIST_STORE ( gtk_tree_view_get_model ( dvbnet->treeview ) ) );
+
+	uint16_t ifs = 0; for ( ifs = 0; ifs < UINT8_MAX - 1; ifs++ )
 	{
 		uint16_t pid = 0;
 		uint8_t encaps = 0;
@@ -123,23 +192,16 @@ static void dvb_net_set_if_info ( Dvbnet *dvbnet )
 
 		if ( ret == -1 ) continue;
 
-		if ( ifs == 0 )
-		{
-			sprintf ( text, "IF:  dvb%d_%d;  Pid:  %d;  Encapsulation:  %s\n",
-				dvbnet->dvb_adapter, ifs, pid, ( encaps ) ? "Ule" : "Mpe" );
-		}
-		else
-		{
-			p = text;
-			sprintf ( text, "%sIF:  dvb%d_%d;  Pid:  %d;  Encapsulation:  %s\n", p,
-				dvbnet->dvb_adapter, ifs, pid, ( encaps ) ? "Ule" : "Mpe" );
-		}
-	}
+		sprintf ( text, "dvb%d_%d", dvbnet->dvb_adapter, ifs );
 
-	if ( text[0] )
-		gtk_label_set_text ( dvbnet->label_if, text );
-	else
-		gtk_label_set_text ( dvbnet->label_if, "Status" );
+		char *str_ip  = dvbnet_get_ip ( text, 0 );
+		char *str_mac = dvbnet_get_ip ( text, 1 );
+
+		dvbnet_treeview_append ( text, ifs, pid, encaps, str_ip, str_mac, dvbnet );
+
+		free ( str_ip  );
+		free ( str_mac );
+	}
 
 	close ( dvbnet->net_fd );
 }
@@ -197,6 +259,8 @@ static void dvb_net_set_ip ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 	sprintf ( cmd, "ifconfig dvb%u_%u %s", dvbnet->dvb_adapter, dvbnet->if_num, gtk_entry_get_text ( dvbnet->entry_ip ) );	
 
 	system ( cmd );
+
+	dvb_net_set_if_info ( dvbnet );
 }
 
 static void dvb_net_set_mac ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
@@ -205,6 +269,8 @@ static void dvb_net_set_mac ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 	sprintf ( cmd, "ifconfig dvb%u_%u hw ether %s", dvbnet->dvb_adapter, dvbnet->if_num, gtk_entry_get_text ( dvbnet->entry_mac ) );	
 
 	system ( cmd );
+
+	dvb_net_set_if_info ( dvbnet );
 }
 
 static void dvb_net_del_if_num_run ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
@@ -236,13 +302,22 @@ static void dvb_net_act_if_num ( enum mode act, Dvbnet *dvbnet )
 	GtkBox *m_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_VERTICAL, 0 );
 	gtk_box_set_spacing ( m_box, 5 );
 
-	GtkSpinButton *spinbutton = (GtkSpinButton *)gtk_spin_button_new_with_range ( 0, MAX_IF-1, 1 );
+	GtkBox *h_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_HORIZONTAL, 0 );
+	gtk_box_set_spacing ( h_box, 5 );
+
+	GtkLabel *label = (GtkLabel *)gtk_label_new ( "IF-Num " );
+	gtk_widget_set_halign ( GTK_WIDGET ( label ), GTK_ALIGN_START );
+
+	GtkSpinButton *spinbutton = (GtkSpinButton *)gtk_spin_button_new_with_range ( 0, UINT8_MAX - 1, 1 );
 	gtk_spin_button_set_value ( spinbutton, dvbnet->if_num );
 	g_signal_connect ( spinbutton, "changed", G_CALLBACK ( dvb_net_del_changed_if_num ), dvbnet );
 
-	gtk_box_pack_start ( m_box, GTK_WIDGET ( spinbutton ), FALSE, FALSE, 0 );
+	gtk_box_pack_start ( h_box, GTK_WIDGET ( label      ), FALSE, FALSE, 0 );
+	gtk_box_pack_start ( h_box, GTK_WIDGET ( spinbutton ), TRUE,  TRUE,  0 );
 
-	GtkBox *h_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_HORIZONTAL, 0 );
+	gtk_box_pack_start ( m_box, GTK_WIDGET ( h_box ), FALSE, FALSE, 0 );
+
+	h_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_HORIZONTAL, 0 );
 	gtk_box_set_spacing ( h_box, 5 );
 
 	GtkButton *button = (GtkButton *)gtk_button_new_with_label ( "⏻" );
@@ -425,9 +500,41 @@ static GtkBox * dvbnet_create_net_box_status ( Dvbnet *dvbnet )
 	GtkBox *v_box = (GtkBox *)gtk_box_new ( GTK_ORIENTATION_VERTICAL, 0 );
 	gtk_widget_set_margin_top    ( GTK_WIDGET ( v_box ), 10 );
 	gtk_widget_set_margin_bottom ( GTK_WIDGET ( v_box ), 10 );
+	gtk_widget_set_margin_start  ( GTK_WIDGET ( v_box ), 10 );
+	gtk_widget_set_margin_end    ( GTK_WIDGET ( v_box ), 10 );
 
-	dvbnet->label_if = (GtkLabel *)gtk_label_new ( "Status" );
-	gtk_box_pack_start ( v_box, GTK_WIDGET ( dvbnet->label_if ), FALSE, FALSE, 0 );
+	GtkScrolledWindow *scroll = (GtkScrolledWindow *)gtk_scrolled_window_new ( NULL, NULL );
+	gtk_scrolled_window_set_policy ( scroll, GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC );
+
+	GtkListStore *store = gtk_list_store_new ( NUM_COLS, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING );
+
+	dvbnet->treeview = (GtkTreeView *)gtk_tree_view_new_with_model ( GTK_TREE_MODEL ( store ) );
+
+	GtkCellRenderer *renderer;
+	GtkTreeViewColumn *column;
+
+	struct Column { const char *name; const char *type; uint8_t num; } column_n[] =
+	{
+		{ "IF-Num",        "text", COL_NUM  },
+		{ "Net-Name",      "text", COL_NAME },
+		{ "Pid",           "text", COL_PID  },
+		{ "Encapsulation", "text", COL_ECPS },
+		{ "Ip",            "text", COL_STR_IP  },
+		{ "Mac",           "text", COL_STR_MAC }
+	};
+
+	uint8_t c = 0; for ( c = 0; c < G_N_ELEMENTS ( column_n ); c++ )
+	{
+		renderer = gtk_cell_renderer_text_new ();
+
+		column = gtk_tree_view_column_new_with_attributes ( column_n[c].name, renderer, column_n[c].type, column_n[c].num, NULL );
+		gtk_tree_view_append_column ( dvbnet->treeview, column );
+	}
+
+	gtk_container_add ( GTK_CONTAINER ( scroll ), GTK_WIDGET ( dvbnet->treeview ) );
+	g_object_unref ( G_OBJECT (store) );
+
+	gtk_box_pack_start ( v_box, GTK_WIDGET ( scroll ), TRUE, TRUE, 0 );
 
 	return v_box;
 }
@@ -479,7 +586,7 @@ static void dvbnet_new_window ( GApplication *app )
 	gtk_box_pack_start ( main_vbox, GTK_WIDGET ( net_box_p ), FALSE, FALSE, 0 );
 
 	GtkBox *net_box_s = dvbnet_create_net_box_status ( dvbnet );
-	gtk_box_pack_start ( main_vbox, GTK_WIDGET ( net_box_s ), FALSE, FALSE, 0 );
+	gtk_box_pack_start ( main_vbox, GTK_WIDGET ( net_box_s ), TRUE, TRUE, 0 );
 
 	GtkBox *net_box_c = dvbnet_create_net_box_control ( dvbnet );
 	gtk_box_pack_end ( main_vbox, GTK_WIDGET ( net_box_c ), FALSE, FALSE, 0 );
