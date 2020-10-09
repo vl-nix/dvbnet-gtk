@@ -1,11 +1,9 @@
-exec_path = bindir + '/' + meson.project_name()
-
 desktop_conf = configuration_data()
 
 set_desktop = [
   ['NAME', 'DvbNet-Gtk'],
   ['COMMENT', 'DvbNet tool'],
-  ['EXEC', exec_path],
+  ['EXEC', meson.project_name() + '-pkexec'],
   ['ICON', 'display'],
   ['TERMINAL', 'false'],
   ['TYPE', 'Application'],
@@ -26,3 +24,7 @@ configure_file(
   install: true,
   install_dir: join_paths('share', 'applications')
 )
+
+bindir = join_paths(get_option('prefix'), get_option('bindir'))
+pkexec_sh = configure_file(input: 'dvbnet-gtk-pkexec', output: 'dvbnet-gtk-pkexec', copy: true)
+install_data(pkexec_sh, install_dir: bindir)
