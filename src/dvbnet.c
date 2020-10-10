@@ -12,10 +12,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <assert.h>
 
-#include <netinet/in.h>
 #include <net/if.h>
+#include <sys/socket.h>
+#include <net/if_arp.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 
 #include <linux/dvb/net.h>
 
@@ -117,13 +120,16 @@ static int dvb_net_get_if_info ( int fd, uint16_t ifnum, uint16_t *pid, uint8_t 
 	return 0;
 }
 
-static char * dvbnet_get_ip ( const char *net_name, uint8_t mac_ip )
+static char * dvbnet_get_mac_ip ( const char *net_name, uint8_t mac_ip )
 {
 	struct ifreq ifr;
 
-	int fd = ( mac_ip ) ? socket ( PF_INET, SOCK_DGRAM, IPPROTO_IP ) : socket ( AF_INET, SOCK_DGRAM, 0 );
+	int fd = socket ( AF_INET, SOCK_DGRAM, 0 );
 
-	strncpy ( ifr.ifr_name, net_name, IFNAMSIZ-1 );
+	if ( fd < 0 ) { perror ( "socket" ); return g_strdup ( "None" ); }
+
+	memset ( &ifr, 0x00, sizeof(ifr) );
+	strcpy ( ifr.ifr_name, net_name  );
 
 	if ( mac_ip )
 	{
@@ -132,7 +138,7 @@ static char * dvbnet_get_ip ( const char *net_name, uint8_t mac_ip )
 		char *ret = malloc ( 18 );
 
 		uint8_t i = 0; for ( i = 0; i < 6; ++i )
-			snprintf ( ret+i*3, 13-i*2, "%02x%s", (uint8_t)ifr.ifr_addr.sa_data[i], ":" );
+			snprintf ( ret + (i*3), (size_t)(18 - (i*3)), "%02x%s", (uint8_t)ifr.ifr_addr.sa_data[i], ":" );
 
 		close ( fd );
 
@@ -150,6 +156,53 @@ static char * dvbnet_get_ip ( const char *net_name, uint8_t mac_ip )
 	}
 
 	return g_strdup ( "None" );
+}
+
+static void dvbnet_set_mac ( const char *net_name, const char *mac )
+{
+	struct ifreq ifr;
+
+	int fd = socket ( AF_INET, SOCK_DGRAM, 0 );
+
+	if ( fd < 0 ) { perror ( "socket" ); return; }
+
+	sscanf ( mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+		&ifr.ifr_hwaddr.sa_data[0],
+		&ifr.ifr_hwaddr.sa_data[1],
+		&ifr.ifr_hwaddr.sa_data[2],
+		&ifr.ifr_hwaddr.sa_data[3],
+		&ifr.ifr_hwaddr.sa_data[4],
+		&ifr.ifr_hwaddr.sa_data[5] );
+
+	strcpy ( ifr.ifr_name, net_name );
+
+	ifr.ifr_hwaddr.sa_family = ARPHRD_ETHER;
+
+	if ( ioctl ( fd, SIOCSIFHWADDR, &ifr ) < 0 ) perror ( "SIOCSIFHWADDR" );
+
+	close ( fd );
+}
+
+static void dvbnet_set_ip ( const char *net_name, const char *host )
+{
+	struct ifreq ifr;
+	struct sockaddr_in inet_addr;
+
+	int fd = socket ( AF_INET, SOCK_DGRAM, 0 );
+
+	if ( fd < 0 ) { perror ( "socket" ); return; }
+
+	bzero  ( ifr.ifr_name, IFNAMSIZ );
+	strcpy ( ifr.ifr_name, net_name );
+
+	inet_addr.sin_family = AF_INET;
+	inet_pton ( AF_INET, host, &(inet_addr.sin_addr) );
+
+	memcpy ( &(ifr.ifr_addr), &inet_addr, sizeof (struct sockaddr) );
+
+	if ( ioctl ( fd, SIOCSIFADDR, &ifr ) < 0 ) perror ( "SIOCSIFADDR" );
+
+	close ( fd );
 }
 
 static void dvbnet_treeview_append ( const char *name, uint16_t if_num, uint16_t pid, uint8_t encaps, const char *ip_str, const char *str_mac, Dvbnet *dvbnet )
@@ -177,7 +230,7 @@ static void dvb_net_set_if_info ( Dvbnet *dvbnet )
 
 	if ( dvbnet->net_fd == -1 ) return;
 
-	char text[10] = {};
+	char net_name[10] = {};
 
 	gtk_list_store_clear ( GTK_LIST_STORE ( gtk_tree_view_get_model ( dvbnet->treeview ) ) );
 
@@ -190,12 +243,12 @@ static void dvb_net_set_if_info ( Dvbnet *dvbnet )
 
 		if ( ret == -1 ) continue;
 
-		sprintf ( text, "dvb%d_%d", dvbnet->dvb_adapter, ifs );
+		sprintf ( net_name, "dvb%d_%d", dvbnet->dvb_adapter, ifs );
 
-		char *str_ip  = dvbnet_get_ip ( text, 0 );
-		char *str_mac = dvbnet_get_ip ( text, 1 );
+		char *str_ip  = dvbnet_get_mac_ip ( net_name, 0 );
+		char *str_mac = dvbnet_get_mac_ip ( net_name, 1 );
 
-		dvbnet_treeview_append ( text, ifs, pid, encaps, str_ip, str_mac, dvbnet );
+		dvbnet_treeview_append ( net_name, ifs, pid, encaps, str_ip, str_mac, dvbnet );
 
 		free ( str_ip  );
 		free ( str_mac );
@@ -206,10 +259,10 @@ static void dvb_net_set_if_info ( Dvbnet *dvbnet )
 
 static void dvb_net_del_if ( Dvbnet *dvbnet )
 {
-	char cmd[250];
+	char cmd[50];
 	sprintf ( cmd, "ip link set dvb%u_%u down", dvbnet->dvb_adapter, dvbnet->if_num );	
 
-	system ( cmd );
+	if ( system ( cmd ) != 0 ) return;
 	sleep  ( 1 );
 
 	int ret = ioctl ( dvbnet->net_fd, NET_REMOVE_IF, dvbnet->if_num );
@@ -253,20 +306,31 @@ static void dvb_net_add ( Dvbnet *dvbnet )
 
 static void dvb_net_set_ip ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	char cmd[250];
+/*
+	char cmd[50];
 	sprintf ( cmd, "ifconfig dvb%u_%u %s", dvbnet->dvb_adapter, dvbnet->if_num, gtk_entry_get_text ( dvbnet->entry_ip ) );	
 
 	system ( cmd );
+*/
+	char net_name[10];
+	sprintf ( net_name, "dvb%u_%u", dvbnet->dvb_adapter, dvbnet->if_num );
+
+	dvbnet_set_ip ( net_name, gtk_entry_get_text ( dvbnet->entry_ip ) );
 
 	dvb_net_set_if_info ( dvbnet );
 }
 
 static void dvb_net_set_mac ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	char cmd[250];
+/*
+	char cmd[50];
 	sprintf ( cmd, "ifconfig dvb%u_%u hw ether %s", dvbnet->dvb_adapter, dvbnet->if_num, gtk_entry_get_text ( dvbnet->entry_mac ) );	
-
 	system ( cmd );
+*/
+	char net_name[10];
+	sprintf ( net_name, "dvb%u_%u", dvbnet->dvb_adapter, dvbnet->if_num );
+
+	dvbnet_set_mac ( net_name, gtk_entry_get_text ( dvbnet->entry_mac ) );
 
 	dvb_net_set_if_info ( dvbnet );
 }
@@ -596,7 +660,6 @@ static void dvbnet_new_window ( GApplication *app )
 
 	dvb_net_set_if_info ( dvbnet );
 }
-
 
 static void dvbnet_activate ( GApplication *app )
 {
