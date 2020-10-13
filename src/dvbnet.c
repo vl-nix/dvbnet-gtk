@@ -9,15 +9,15 @@
 
 #include "dvbnet.h"
 
+#include <math.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <assert.h>
 
 #include <net/if.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <net/if_arp.h>
-#include <arpa/inet.h>
 #include <netinet/in.h>
 
 #include <linux/dvb/net.h>
@@ -212,15 +212,19 @@ static void dvbnet_treeview_append ( const char *name, uint8_t if_num, uint16_t 
 	int ind = gtk_tree_model_iter_n_children ( model, NULL );
 	if ( ind >= UINT8_MAX ) return;
 
+	char *buf = g_strdup_printf ( "0x%.4X", pid );
+
 	gtk_list_store_append ( GTK_LIST_STORE ( model ), &iter );
 	gtk_list_store_set    ( GTK_LIST_STORE ( model ), &iter,
 				COL_NUM, if_num,
 				COL_NAME, name,
-				COL_PID,  pid,
+				COL_PID,  buf,
 				COL_ECPS, ( encaps ) ? "Ule" : "Mpe",
 				COL_STR_IP, ip_str,
 				COL_STR_MAC, str_mac,
 				-1 );
+
+	free ( buf );
 }
 
 static void dvbnet_set_if_info ( Dvbnet *dvbnet )
@@ -466,11 +470,27 @@ static void dvbnet_spinbutton_changed_dvb_net ( GtkSpinButton *button, Dvbnet *d
 	dvbnet->dvb_net = (uint8_t)gtk_spin_button_get_value_as_int ( button );
 }
 
-static void dvbnet_spinbutton_changed_dvb_pid ( GtkSpinButton *button, Dvbnet *dvbnet )
+static int dvbnet_spinbutton_hex_output ( GtkSpinButton *spinbutton, Dvbnet *dvbnet )
 {
-	gtk_spin_button_update ( button );
+	char *buf;
 
-	dvbnet->net_pid = (uint16_t)gtk_spin_button_get_value_as_int ( button );
+	GtkAdjustment *adjustment = gtk_spin_button_get_adjustment (spinbutton);
+
+	int val = (int) gtk_adjustment_get_value (adjustment);
+
+	dvbnet->net_pid = (uint16_t)val;
+
+	if ( val <= 0 )
+		buf = g_strdup ("0x0000");
+	else
+		buf = g_strdup_printf ( "0x%.4X", val );
+
+	if ( strcmp ( buf, gtk_entry_get_text ( GTK_ENTRY (spinbutton) ) ) )
+		gtk_entry_set_text (GTK_ENTRY (spinbutton), buf);
+
+	free ( buf );
+
+	return TRUE;
 }
 
 static void dvbnet_combo_changed_dvb_ens ( GtkComboBoxText *combo_box, Dvbnet *dvbnet )
@@ -519,9 +539,9 @@ static GtkBox * dvbnet_create_net_box_props ( Dvbnet *dvbnet )
 	label = (GtkLabel *)gtk_label_new ( "Pid" );
 	gtk_widget_set_halign ( GTK_WIDGET ( label ), GTK_ALIGN_START );
 
-	spinbutton = (GtkSpinButton *)gtk_spin_button_new_with_range ( 0, UINT16_MAX, 1 );
-	gtk_spin_button_set_value ( spinbutton, dvbnet->net_pid );
-	g_signal_connect ( spinbutton, "changed", G_CALLBACK ( dvbnet_spinbutton_changed_dvb_pid ), dvbnet );
+	GtkAdjustment *adjustment = gtk_adjustment_new ( dvbnet->net_pid, 0, UINT16_MAX, 1, 16, 0 );
+	spinbutton = (GtkSpinButton *)gtk_spin_button_new ( adjustment, 1, 0 );
+	g_signal_connect ( spinbutton, "output", G_CALLBACK ( dvbnet_spinbutton_hex_output ), dvbnet );
 
 	gtk_grid_attach ( GTK_GRID ( grid ), GTK_WIDGET ( label      ), 0, 1, 1, 1 );
 	gtk_grid_attach ( GTK_GRID ( grid ), GTK_WIDGET ( spinbutton ), 1, 1, 1, 1 );
@@ -570,7 +590,7 @@ static GtkBox * dvbnet_create_net_box_status ( Dvbnet *dvbnet )
 	GtkScrolledWindow *scroll = (GtkScrolledWindow *)gtk_scrolled_window_new ( NULL, NULL );
 	gtk_scrolled_window_set_policy ( scroll, GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC );
 
-	GtkListStore *store = gtk_list_store_new ( NUM_COLS, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING );
+	GtkListStore *store = gtk_list_store_new ( NUM_COLS, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING );
 
 	dvbnet->treeview = (GtkTreeView *)gtk_tree_view_new_with_model ( GTK_TREE_MODEL ( store ) );
 
