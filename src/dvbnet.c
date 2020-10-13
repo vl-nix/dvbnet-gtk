@@ -49,9 +49,8 @@ struct _Dvbnet
 	GtkEntry *entry_mac;
 	GtkTreeView *treeview;
 
-	int net_fd;
-	uint8_t  dvb_adapter, dvb_net, net_ens;
-	uint16_t net_pid, if_num;
+	uint16_t net_pid;
+	uint8_t  dvb_adapter, dvb_net, if_num, net_ens;
 };
 
 G_DEFINE_TYPE (Dvbnet, dvbnet, GTK_TYPE_APPLICATION)
@@ -67,8 +66,8 @@ static void dvbnet_about ( Dvbnet *dvbnet )
 	const char *authors[] = { "Stepan Perun", " ", NULL };
 
 	gtk_about_dialog_set_program_name ( dialog, "DvbNet-Gtk" );
-	gtk_about_dialog_set_version ( dialog, "1.1.1" );
-	gtk_about_dialog_set_license_type ( dialog, GTK_LICENSE_LGPL_3_0 );
+	gtk_about_dialog_set_version ( dialog, "1.1.2" );
+	gtk_about_dialog_set_license_type ( dialog, GTK_LICENSE_GPL_3_0 );
 	gtk_about_dialog_set_authors ( dialog, authors );
 	gtk_about_dialog_set_website ( dialog,   "https://github.com/vl-nix/dvbnet-gtk" );
 	gtk_about_dialog_set_copyright ( dialog, "Copyright 2020 DvbNet-Gtk" );
@@ -87,10 +86,10 @@ static void dvbnet_message_dialog ( const char *error, const char *file_or_info,
 	gtk_widget_destroy ( GTK_WIDGET ( dialog ) );
 }
 
-static int dvb_net_open ( Dvbnet *dvbnet )
+static int dvbnet_open ( Dvbnet *dvbnet )
 {
-	char file[80];
-	sprintf ( file, "/dev/dvb/adapter%i/net%i", dvbnet->dvb_adapter, dvbnet->dvb_net );
+	char file[80] = {};
+	sprintf ( file, "/dev/dvb/adapter%u/net%u", dvbnet->dvb_adapter, dvbnet->dvb_net );
 
 	int fd = open ( file, O_RDWR );
 
@@ -103,7 +102,7 @@ static int dvb_net_open ( Dvbnet *dvbnet )
 	return fd;
 }
 
-static int dvb_net_get_if_info ( int fd, uint16_t ifnum, uint16_t *pid, uint8_t *encaps )
+static int dvbnet_get_if_info ( int fd, uint8_t ifnum, uint16_t *pid, uint8_t *encaps )
 {
 	struct dvb_net_if info;
 
@@ -205,7 +204,7 @@ static void dvbnet_set_ip ( const char *net_name, const char *host )
 	close ( fd );
 }
 
-static void dvbnet_treeview_append ( const char *name, uint16_t if_num, uint16_t pid, uint8_t encaps, const char *ip_str, const char *str_mac, Dvbnet *dvbnet )
+static void dvbnet_treeview_append ( const char *name, uint8_t if_num, uint16_t pid, uint8_t encaps, const char *ip_str, const char *str_mac, Dvbnet *dvbnet )
 {
 	GtkTreeIter iter;
 	GtkTreeModel *model = gtk_tree_view_get_model ( dvbnet->treeview );
@@ -224,26 +223,26 @@ static void dvbnet_treeview_append ( const char *name, uint16_t if_num, uint16_t
 				-1 );
 }
 
-static void dvb_net_set_if_info ( Dvbnet *dvbnet )
+static void dvbnet_set_if_info ( Dvbnet *dvbnet )
 {
-	dvbnet->net_fd = dvb_net_open ( dvbnet );
+	int net_fd = dvbnet_open ( dvbnet );
 
-	if ( dvbnet->net_fd == -1 ) return;
+	if ( net_fd == -1 ) return;
 
-	char net_name[10] = {};
+	char net_name[20] = {};
 
 	gtk_list_store_clear ( GTK_LIST_STORE ( gtk_tree_view_get_model ( dvbnet->treeview ) ) );
 
-	uint16_t ifs = 0; for ( ifs = 0; ifs < UINT8_MAX - 1; ifs++ )
+	uint8_t ifs = 0; for ( ifs = 0; ifs < UINT8_MAX - 1; ifs++ )
 	{
 		uint16_t pid = 0;
 		uint8_t encaps = 0;
 
-		int ret = dvb_net_get_if_info ( dvbnet->net_fd, ifs, &pid, &encaps );
+		int ret = dvbnet_get_if_info ( net_fd, ifs, &pid, &encaps );
 
 		if ( ret == -1 ) continue;
 
-		sprintf ( net_name, "dvb%d_%d", dvbnet->dvb_adapter, ifs );
+		sprintf ( net_name, "dvb%u_%u", dvbnet->dvb_adapter, ifs );
 
 		char *str_ip  = dvbnet_get_mac_ip ( net_name, 0 );
 		char *str_mac = dvbnet_get_mac_ip ( net_name, 1 );
@@ -254,18 +253,32 @@ static void dvb_net_set_if_info ( Dvbnet *dvbnet )
 		free ( str_mac );
 	}
 
-	close ( dvbnet->net_fd );
+	close ( net_fd );
 }
 
-static void dvb_net_del_if ( Dvbnet *dvbnet )
+static void dvbnet_del_if ( int net_fd, Dvbnet *dvbnet )
 {
-	char cmd[50];
-	sprintf ( cmd, "ip link set dvb%u_%u down", dvbnet->dvb_adapter, dvbnet->if_num );	
+	char net_name[20] = {};
+	sprintf ( net_name, "dvb%u_%u", dvbnet->dvb_adapter, dvbnet->if_num );
 
-	if ( system ( cmd ) != 0 ) return;
+	struct ifreq ifr;
+
+	int fd = socket ( AF_INET, SOCK_DGRAM, 0 );
+
+	if ( fd < 0 ) { perror ( "socket" ); return; }
+
+	strcpy ( ifr.ifr_name, net_name );
+
+	ioctl ( fd, SIOCGIFFLAGS, &ifr );
+
+	ifr.ifr_flags &= ~ IFF_UP;
+	ioctl ( fd, SIOCSIFFLAGS, &ifr );
+
+	close ( fd );
+
 	sleep  ( 1 );
 
-	int ret = ioctl ( dvbnet->net_fd, NET_REMOVE_IF, dvbnet->if_num );
+	int ret = ioctl ( net_fd, NET_REMOVE_IF, dvbnet->if_num );
 
 	if ( ret == -1 )
 	{
@@ -274,7 +287,7 @@ static void dvb_net_del_if ( Dvbnet *dvbnet )
 	}
 }
 
-static int dvb_net_add_if ( Dvbnet *dvbnet )
+static int dvbnet_add_if ( int net_fd, Dvbnet *dvbnet )
 {
 	struct dvb_net_if params;
 
@@ -282,7 +295,7 @@ static int dvb_net_add_if ( Dvbnet *dvbnet )
 	params.pid = dvbnet->net_pid;
 	params.feedtype = ( dvbnet->net_ens ) ? DVB_NET_FEEDTYPE_ULE : DVB_NET_FEEDTYPE_MPE;
 
-	int ret = ioctl ( dvbnet->net_fd, NET_ADD_IF, &params );
+	int ret = ioctl ( net_fd, NET_ADD_IF, &params );
 
 	if ( ret == -1 )
 	{
@@ -293,67 +306,56 @@ static int dvb_net_add_if ( Dvbnet *dvbnet )
 	return ret;
 }
 
-static void dvb_net_add ( Dvbnet *dvbnet )
+static void dvbnet_add ( Dvbnet *dvbnet )
 {
-	dvbnet->net_fd = dvb_net_open ( dvbnet );
+	int net_fd = dvbnet_open ( dvbnet );
 
-	if ( dvbnet->net_fd == -1 ) return;
+	if ( net_fd == -1 ) return;
 
-	dvb_net_add_if ( dvbnet );
+	dvbnet_add_if ( net_fd, dvbnet );
 
-	close ( dvbnet->net_fd );
+	close ( net_fd );
 }
 
-static void dvb_net_set_ip ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
+static void dvbnet_click_set_ip ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-/*
-	char cmd[50];
-	sprintf ( cmd, "ifconfig dvb%u_%u %s", dvbnet->dvb_adapter, dvbnet->if_num, gtk_entry_get_text ( dvbnet->entry_ip ) );	
-
-	system ( cmd );
-*/
-	char net_name[10];
+	char net_name[20] = {};
 	sprintf ( net_name, "dvb%u_%u", dvbnet->dvb_adapter, dvbnet->if_num );
 
 	dvbnet_set_ip ( net_name, gtk_entry_get_text ( dvbnet->entry_ip ) );
 
-	dvb_net_set_if_info ( dvbnet );
+	dvbnet_set_if_info ( dvbnet );
 }
 
-static void dvb_net_set_mac ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
+static void dvbnet_click_set_mac ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-/*
-	char cmd[50];
-	sprintf ( cmd, "ifconfig dvb%u_%u hw ether %s", dvbnet->dvb_adapter, dvbnet->if_num, gtk_entry_get_text ( dvbnet->entry_mac ) );	
-	system ( cmd );
-*/
-	char net_name[10];
+	char net_name[20] = {};
 	sprintf ( net_name, "dvb%u_%u", dvbnet->dvb_adapter, dvbnet->if_num );
 
 	dvbnet_set_mac ( net_name, gtk_entry_get_text ( dvbnet->entry_mac ) );
 
-	dvb_net_set_if_info ( dvbnet );
+	dvbnet_set_if_info ( dvbnet );
 }
 
-static void dvb_net_del_if_num_run ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
+static void dvbnet_click_del_if ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	dvbnet->net_fd = dvb_net_open ( dvbnet );
+	int net_fd = dvbnet_open ( dvbnet );
 
-	if ( dvbnet->net_fd == -1 ) return;
+	if ( net_fd == -1 ) return;
 
-	dvb_net_del_if ( dvbnet );
+	dvbnet_del_if ( net_fd, dvbnet );
 
-	close ( dvbnet->net_fd );
+	close ( net_fd );
 
-	dvb_net_set_if_info ( dvbnet );
+	dvbnet_set_if_info ( dvbnet );
 }
 
-static void dvb_net_del_changed_if_num ( GtkSpinButton *button, Dvbnet *dvbnet )
+static void dvbnet_changed_if_num ( GtkSpinButton *button, Dvbnet *dvbnet )
 {
-	dvbnet->if_num = (uint16_t)gtk_spin_button_get_value_as_int ( button );
+	dvbnet->if_num = (uint8_t)gtk_spin_button_get_value_as_int ( button );
 }
 
-static void dvb_net_act_if_num ( enum mode act, Dvbnet *dvbnet )
+static void dvbnet_act_if_num ( enum mode act, Dvbnet *dvbnet )
 {
 	GtkWindow *window = (GtkWindow *)gtk_window_new ( GTK_WINDOW_TOPLEVEL );
 	gtk_window_set_title ( window, "DvbNet interface" );
@@ -372,7 +374,7 @@ static void dvb_net_act_if_num ( enum mode act, Dvbnet *dvbnet )
 
 	GtkSpinButton *spinbutton = (GtkSpinButton *)gtk_spin_button_new_with_range ( 0, UINT8_MAX - 1, 1 );
 	gtk_spin_button_set_value ( spinbutton, dvbnet->if_num );
-	g_signal_connect ( spinbutton, "changed", G_CALLBACK ( dvb_net_del_changed_if_num ), dvbnet );
+	g_signal_connect ( spinbutton, "changed", G_CALLBACK ( dvbnet_changed_if_num ), dvbnet );
 
 	gtk_box_pack_start ( h_box, GTK_WIDGET ( label      ), FALSE, FALSE, 0 );
 	gtk_box_pack_start ( h_box, GTK_WIDGET ( spinbutton ), TRUE,  TRUE,  0 );
@@ -389,19 +391,19 @@ static void dvb_net_act_if_num ( enum mode act, Dvbnet *dvbnet )
 	if ( act == DEL_IF )
 	{
 		button = (GtkButton *)gtk_button_new_with_label ( "➖" );
-		g_signal_connect ( button, "clicked", G_CALLBACK ( dvb_net_del_if_num_run ), dvbnet );
+		g_signal_connect ( button, "clicked", G_CALLBACK ( dvbnet_click_del_if ), dvbnet );
 	}
 
 	if ( act == SET_IP )
 	{
 		button = (GtkButton *)gtk_button_new_with_label ( "Set IP" );
-		g_signal_connect ( button, "clicked", G_CALLBACK ( dvb_net_set_ip ), dvbnet );
+		g_signal_connect ( button, "clicked", G_CALLBACK ( dvbnet_click_set_ip ), dvbnet );
 	}
 
 	if ( act == SET_MAC )
 	{
 		button = (GtkButton *)gtk_button_new_with_label ( "Set Mac" );
-		g_signal_connect ( button, "clicked", G_CALLBACK ( dvb_net_set_mac ), dvbnet );
+		g_signal_connect ( button, "clicked", G_CALLBACK ( dvbnet_click_set_mac ), dvbnet );
 	}
 
 	g_signal_connect_swapped ( button, "clicked", G_CALLBACK ( gtk_widget_destroy ), window );
@@ -417,33 +419,33 @@ static void dvb_net_act_if_num ( enum mode act, Dvbnet *dvbnet )
 
 static void dvbnet_clicked_button_net_ip ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	dvb_net_act_if_num ( SET_IP, dvbnet );
+	dvbnet_act_if_num ( SET_IP, dvbnet );
 }
 
 static void dvbnet_clicked_button_net_mac ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	dvb_net_act_if_num ( SET_MAC, dvbnet );
+	dvbnet_act_if_num ( SET_MAC, dvbnet );
 }
 
-static void dvb_net_del ( Dvbnet *dvbnet )
+static void dvbnet_del ( Dvbnet *dvbnet )
 {
-	dvb_net_act_if_num ( DEL_IF, dvbnet );
+	dvbnet_act_if_num ( DEL_IF, dvbnet );
 }
 
 static void dvbnet_clicked_button_net_add ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	dvb_net_add ( dvbnet );
-	dvb_net_set_if_info ( dvbnet );
+	dvbnet_add ( dvbnet );
+	dvbnet_set_if_info ( dvbnet );
 }
 
 static void dvbnet_clicked_button_net_rld ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	dvb_net_set_if_info ( dvbnet );
+	dvbnet_set_if_info ( dvbnet );
 }
 
 static void dvbnet_clicked_button_net_del ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
 {
-	dvb_net_del ( dvbnet );
+	dvbnet_del ( dvbnet );
 }
 
 static void dvbnet_clicked_button_net_inf ( G_GNUC_UNUSED GtkButton *button, Dvbnet *dvbnet )
@@ -658,7 +660,7 @@ static void dvbnet_new_window ( GApplication *app )
 
 	gtk_widget_show_all ( GTK_WIDGET ( dvbnet->window ) );
 
-	dvb_net_set_if_info ( dvbnet );
+	dvbnet_set_if_info ( dvbnet );
 }
 
 static void dvbnet_activate ( GApplication *app )
@@ -673,7 +675,6 @@ static void dvbnet_init ( Dvbnet *dvbnet )
 	dvbnet->net_pid = 0;
 	dvbnet->if_num  = 0;
 	dvbnet->net_ens = 0;
-	dvbnet->net_fd  = -1;
 }
 
 static void dvbnet_finalize ( GObject *object )
