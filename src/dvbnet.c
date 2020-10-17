@@ -7,8 +7,6 @@
 * http://www.gnu.org/licenses/gpl-3.0.html
 */
 
-#include "dvbnet.h"
-
 #include <math.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,6 +19,12 @@
 #include <netinet/in.h>
 
 #include <linux/dvb/net.h>
+
+#include <gtk/gtk.h>
+
+#define DVBNET_TYPE_APPLICATION dvbnet_get_type()
+
+G_DECLARE_FINAL_TYPE ( Dvbnet, dvbnet, DVBNET, APPLICATION, GtkApplication )
 
 enum mode 
 {
@@ -125,14 +129,14 @@ static char * dvbnet_get_mac_ip ( const char *net_name, uint8_t mac_ip )
 
 	int fd = socket ( AF_INET, SOCK_DGRAM, 0 );
 
-	if ( fd < 0 ) { perror ( "socket" ); return g_strdup ( "None" ); }
+	if ( fd < 0 ) { perror ( "socket" ); return NULL; }
 
 	memset ( &ifr, 0x00, sizeof(ifr) );
 	strcpy ( ifr.ifr_name, net_name  );
 
 	if ( mac_ip )
 	{
-		if ( ioctl ( fd, SIOCGIFHWADDR, &ifr ) < 0 ) { close ( fd ); return g_strdup ( "None" ); }
+		if ( ioctl ( fd, SIOCGIFHWADDR, &ifr ) < 0 ) { close ( fd ); return NULL; }
 
 		char *ret = malloc ( 18 );
 
@@ -145,7 +149,7 @@ static char * dvbnet_get_mac_ip ( const char *net_name, uint8_t mac_ip )
 	}
 	else
 	{
-		if ( ioctl ( fd, SIOCGIFADDR, &ifr ) < 0 ) { close ( fd ); return g_strdup ( "None" ); }
+		if ( ioctl ( fd, SIOCGIFADDR, &ifr ) < 0 ) { close ( fd ); return NULL; }
 
 		char *ret = g_strdup ( inet_ntoa ( ( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr ) );
 
@@ -154,7 +158,7 @@ static char * dvbnet_get_mac_ip ( const char *net_name, uint8_t mac_ip )
 		return ret;
 	}
 
-	return g_strdup ( "None" );
+	return NULL;
 }
 
 static void dvbnet_set_mac ( const char *net_name, const char *mac )
@@ -212,7 +216,8 @@ static void dvbnet_treeview_append ( const char *name, uint8_t if_num, uint16_t 
 	int ind = gtk_tree_model_iter_n_children ( model, NULL );
 	if ( ind >= UINT8_MAX ) return;
 
-	char *buf = g_strdup_printf ( "0x%.4X", pid );
+	char buf[20] = {};
+	sprintf ( buf, "0x%.4X", pid );
 
 	gtk_list_store_append ( GTK_LIST_STORE ( model ), &iter );
 	gtk_list_store_set    ( GTK_LIST_STORE ( model ), &iter,
@@ -223,8 +228,6 @@ static void dvbnet_treeview_append ( const char *name, uint8_t if_num, uint16_t 
 				COL_STR_IP, ip_str,
 				COL_STR_MAC, str_mac,
 				-1 );
-
-	free ( buf );
 }
 
 static void dvbnet_set_if_info ( Dvbnet *dvbnet )
@@ -251,7 +254,7 @@ static void dvbnet_set_if_info ( Dvbnet *dvbnet )
 		char *str_ip  = dvbnet_get_mac_ip ( net_name, 0 );
 		char *str_mac = dvbnet_get_mac_ip ( net_name, 1 );
 
-		dvbnet_treeview_append ( net_name, ifs, pid, encaps, str_ip, str_mac, dvbnet );
+		dvbnet_treeview_append ( net_name, ifs, pid, encaps, ( str_ip ) ? str_ip : "None", ( str_mac ) ? str_mac : "None", dvbnet );
 
 		free ( str_ip  );
 		free ( str_mac );
@@ -472,23 +475,16 @@ static void dvbnet_spinbutton_changed_dvb_net ( GtkSpinButton *button, Dvbnet *d
 
 static int dvbnet_spinbutton_hex_output ( GtkSpinButton *spinbutton, Dvbnet *dvbnet )
 {
-	char *buf;
-
 	GtkAdjustment *adjustment = gtk_spin_button_get_adjustment (spinbutton);
 
 	int val = (int) gtk_adjustment_get_value (adjustment);
 
 	dvbnet->net_pid = (uint16_t)val;
 
-	if ( val <= 0 )
-		buf = g_strdup ("0x0000");
-	else
-		buf = g_strdup_printf ( "0x%.4X", val );
+	char buf[20] = {};
+	sprintf ( buf, "0x%.4X", val );
 
-	if ( strcmp ( buf, gtk_entry_get_text ( GTK_ENTRY (spinbutton) ) ) )
-		gtk_entry_set_text (GTK_ENTRY (spinbutton), buf);
-
-	free ( buf );
+	gtk_entry_set_text (GTK_ENTRY (spinbutton), buf);
 
 	return TRUE;
 }
